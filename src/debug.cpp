@@ -264,7 +264,7 @@ uint8 *GetNesCHRPointer(int A){
 }
 
 uint8 GetMem(uint16 A) {
-	if ((A >= 0x2000) && (A < 0x4000)) // PPU regs and their mirrors
+	if ((A >= 0x2000) && (A < 0x2008)) // PPU regs and their mirrors
 		switch (A&7) {
 			case 0: return PPU[0];
 			case 1: return PPU[1];

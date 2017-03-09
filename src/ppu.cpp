@@ -1710,7 +1710,7 @@ void FCEUPPU_Power(void) {
 	memset(SPRAM, 0x00, 0x100);
 	FCEUPPU_Reset();
 
-	for (x = 0x2000; x < 0x4000; x += 8) {
+	for (x = 0x2000; x < 0x2008; x += 8) {
 		ARead[x] = A200x;
 		BWrite[x] = B2000;
 		ARead[x + 1] = A200x;

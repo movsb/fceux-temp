@@ -87,6 +87,8 @@ extern void RefreshThrottleFPS();
 #include <cstdlib>
 #include <cstdarg>
 #include <ctime>
+#include "x6502abbrev.h"
+#include "debug.h"
 
 using namespace std;
 
@@ -161,6 +163,8 @@ void FCEU_TogglePPU(void) {
 #endif
 }
 
+void unmap_mem();
+
 static void FCEU_CloseGame(void)
 {
 	if (GameInfo)
@@ -217,6 +221,8 @@ static void FCEU_CloseGame(void)
 		undoLS = false;
 		redoLS = false;
 		AutoSS = false;
+
+        unmap_mem();
 	}
 }
 
@@ -839,6 +845,190 @@ void FCEU_MemoryRand(uint8 *ptr, uint32 size) {
 void hand(X6502 *X, int type, uint32 A) {
 }
 
+static unsigned short op1, op2, op3;
+static unsigned int result;
+
+static DECLFW(my_write_2010)
+{
+    op1 <<= 8;
+    op1 += V;
+}
+
+static DECLFW(my_write_2011)
+{
+    op2 <<= 8;
+    op2 += V;
+}
+
+static DECLFW(my_write_2012)
+{
+    op3 <<= 8;
+    op3 += V;
+}
+
+static DECLFR(my_read_2012345)
+{
+    unsigned char* r = (unsigned char*)&result;
+    switch(A)
+    {
+    case 0x2012: return r[0];
+    case 0x2013: return r[1];
+    case 0x2014: return r[2];
+    case 0x2015: return r[3];
+    default: return 0;
+    }
+}
+
+static HANDLE hMemMapFile;
+static HANDLE hMemMapHandle;
+static unsigned char* hMemMapMem;
+static const int kMapSize = 2 * 1024 * 1024;
+static unsigned char* current_ram_base;
+static size_t ram_bank_size = 4 * 1024;
+static size_t max_ram_bank = kMapSize / ram_bank_size;
+
+static void unmap_mem()
+{
+    if(hMemMapFile) {
+        UnmapViewOfFile(hMemMapMem);
+        CloseHandle(hMemMapHandle);
+        CloseHandle(hMemMapFile);
+        hMemMapFile = nullptr;
+    }
+}
+
+static void map_mem()
+{
+    unmap_mem();
+    if(!GameInfo) return;
+
+    std::string ramfile = GameInfo->filename;
+    ramfile += ".ram";
+
+
+    hMemMapFile = CreateFile(ramfile.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if(hMemMapFile == INVALID_HANDLE_VALUE) {
+        hMemMapFile = nullptr;
+        MessageBox(GetActiveWindow(), "游戏内存映射文件打开失败。", nullptr, MB_OK);
+        return;
+    }
+
+    DWORD dwSize = GetFileSize(hMemMapFile, nullptr);
+    if(dwSize != kMapSize) {
+        SetFilePointer(hMemMapFile, kMapSize, nullptr, FILE_BEGIN);
+        SetEndOfFile(hMemMapFile);
+        SetFilePointer(hMemMapFile, 0, nullptr, FILE_BEGIN);
+        const char* empty = new char[kMapSize]();
+        DWORD nWritten;
+        WriteFile(hMemMapFile, empty, kMapSize, &nWritten, nullptr);
+        delete[] empty;
+    }
+
+    hMemMapHandle = CreateFileMapping(hMemMapFile, nullptr, PAGE_READWRITE, 0, kMapSize, nullptr);
+    if(hMemMapHandle) {
+        hMemMapMem = (unsigned char*)::MapViewOfFile(hMemMapHandle, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, kMapSize);
+    }
+    if(hMemMapHandle == nullptr || hMemMapMem == nullptr) {
+        MessageBox(GetActiveWindow(), "游戏内存映射文件映射失败。", nullptr, MB_OK);
+        if(hMemMapHandle) CloseHandle(hMemMapHandle);
+        CloseHandle(hMemMapFile);
+        return;
+    }
+
+    current_ram_base = hMemMapMem;
+}
+
+static DECLFW(my_write_2015)
+{
+    if(V == 0) {
+        result = op1 * op2;
+    }
+    else if(V == 1) {
+        if(op2 != 0) {
+            unsigned int q = op1 / op2;
+            unsigned int r = op1 % op2;
+            result = (r << 16) + q;
+            _P &= ~V_FLAG;
+        }
+        else {
+            result = 0;
+            _P |= V_FLAG;
+        }
+    }
+	else if(V == 2 || V == 3) {
+		uint32 from = op1;
+		uint32 to = op2;
+		size_t count = op3;
+
+		auto ppu_mem = [](uint32 addr)
+		{
+			addr &= 0x3FFF;
+			if(addr < 0x2000)
+				return &VPage[addr >> 10][addr];
+			if((addr >= 0x2000) && (addr < 0x3F00))
+				return &vnapage[(addr >> 10) & 0x3][addr & 0x3FF];
+			if((addr >= 0x3F00) && (addr < 0x3FFF))
+				return &PALRAM[addr & 0x1F];
+			return (uint8*)0; // never goes here
+		};
+
+		if(V == 2 && (from + count >= 0xFFFF || to + count >= 0x3FFF)
+			|| V == 3 && (to + count >= 0xFFFF || from + count >= 0x3FFF)
+			)
+		{
+			MessageBox(GetActiveWindow(), "内存传输超出范围，取消操作。", nullptr, MB_OK);
+			return;
+		}
+
+		if(V == 2)
+		{
+			while(count--)
+			{
+				*ppu_mem(to) = ARead[from](from);
+				from++;
+				to++;
+			}
+		}
+		else if(V == 3)
+		{
+			while(count--)
+			{
+				BWrite[to](to, *ppu_mem(from));
+				from++;
+				to++;
+			}
+		}
+	}
+    else if(V == 4) {
+        if(op1 >= max_ram_bank) op1 = 0;
+        current_ram_base = hMemMapMem + op1 * ram_bank_size;
+    }
+}
+
+static DECLFW(my_write_ram)
+{
+    current_ram_base[A - 0x5000] = V;
+}
+
+static DECLFR(my_read_ram)
+{
+    return current_ram_base[A - 0x5000];
+}
+
+static void my()
+{
+    SetWriteHandler(0x2010, 0x2010, my_write_2010);
+    SetWriteHandler(0x2011, 0x2011, my_write_2011);
+    SetWriteHandler(0x2012, 0x2012, my_write_2012);
+    SetWriteHandler(0x2015, 0x2015, my_write_2015);
+    SetReadHandler(0x2012, 0x2015, my_read_2012345);
+    map_mem();
+    if(hMemMapFile) {
+        SetReadHandler(0x5000, 0x5FFF, my_read_ram);
+        SetWriteHandler(0x5000, 0x5FFF, my_write_ram);
+    }
+}
+
 void PowerNES(void) {
 	FCEUMOV_AddCommand(FCEUNPCMD_POWER);
 	if (!GameInfo) return;
@@ -862,6 +1052,8 @@ void PowerNES(void) {
 	InitializeInput();
 	FCEUSND_Power();
 	FCEUPPU_Power();
+
+    my();
 
 	//Have the external game hardware "powered" after the internal NES stuff.  Needed for the NSF code and VS System code.
 	GameInterface(GI_POWER);

@@ -56,6 +56,12 @@ extern TASEDITOR_LUA taseditor_lua;
 
 #include "x6502abbrev.h"
 
+static FILE _iob[] = {*stdin, *stdout, *stderr};
+extern "C" FILE* __iob_func(void)
+{
+    return _iob;
+}
+
 bool CheckLua()
 {
 #ifdef WIN32
