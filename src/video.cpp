@@ -238,6 +238,8 @@ void FCEU_PutImage(void)
 		FCEU_DrawNTSCControlBars(XBuf);
 		FCEU_DrawRecordingStatus(XBuf);
 		ShowFPS();
+        extern void my_text();
+        my_text();
 	}
 
 	if(FCEUD_ShouldDrawInputAids())
