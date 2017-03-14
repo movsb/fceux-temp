@@ -938,6 +938,37 @@ static void map_mem()
     current_ram_base = hMemMapMem;
 }
 
+static HANDLE hMemMapFontFile;
+static HANDLE hMemMapFontHandle;
+static unsigned char* hMemMapFontMem;
+
+static void map_font()
+{
+	if(hMemMapFontMem) return;
+    if(!GameInfo) return;
+
+	extern std::string BaseDirectory;
+
+    hMemMapFontFile = CreateFile((BaseDirectory + "/HZK16").c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if(hMemMapFontFile == INVALID_HANDLE_VALUE) {
+        hMemMapFontFile = nullptr;
+        MessageBox(GetActiveWindow(), "没有找到游戏字库文件。", nullptr, MB_OK);
+        return;
+    }
+
+    DWORD dwSize = GetFileSize(hMemMapFontFile, nullptr);
+    hMemMapFontHandle = CreateFileMapping(hMemMapFontFile, nullptr, PAGE_READONLY, 0, dwSize, nullptr);
+    if(hMemMapFontHandle) {
+        hMemMapFontMem = (unsigned char*)::MapViewOfFile(hMemMapFontHandle, FILE_MAP_READ, 0, 0, dwSize);
+    }
+    if(hMemMapFontHandle == nullptr || hMemMapFontMem == nullptr) {
+        MessageBox(GetActiveWindow(), "游戏字库文件映射失败。", nullptr, MB_OK);
+        if(hMemMapFontHandle) CloseHandle(hMemMapFontHandle);
+        CloseHandle(hMemMapFontFile);
+        return;
+    }
+}
+
 static DECLFW(my_write_2015)
 {
     if(V == 0) {
@@ -1015,21 +1046,37 @@ static DECLFR(my_read_ram)
     return current_ram_base[A - 0x5000];
 }
 
+unsigned char* get_chinesee_char_offset(const unsigned char ch[2])
+{
+	  int offset = (94*(unsigned int)(ch[0]-0xa0-1)+(ch[1]-0xa0-1))*32;
+	  return hMemMapFontMem + offset;
+}
+
 void my_text()
 {
-    uint8 wo[32] = {0x04,0x80,0x0E,0xA0,0x78,0x90,0x08,0x90,0x08,0x84,0xFF,0xFE,0x08,0x80,0x08,0x90,0x0A,0x90,0x0C,0x60,0x18,0x40,0x68,0xA0,0x09,0x20,0x0A,0x14,0x28,0x14,0x10,0x0C};
+	const char* text = "一二三四五六七八九十";
     int row = 100;
-    int col = 100;
+    int col = 20;
+	const char* p = text;
 
-    int i, j, k;
-    for(k = 0; k < 16; k++) {
-        for(j = 0; j < 2; j++) {
-            for(i = 0; i < 8; i++) {
-                bool flag = wo[k * 2 + j] & 1 << (7 - i);
-                if(flag)XBuf[(row + k) * 256 + col + i + j * 8] = ARead[0x48](0x48);
-            }
-        }
-    }
+	while(*p)
+	{
+		unsigned char* code = get_chinesee_char_offset((unsigned char*)p);
+		int i, j, k;
+		for(k = 0; k < 16; k++)
+		{
+			for(j = 0; j < 2; j++)
+			{
+				for(i = 0; i < 8; i++)
+				{
+					bool flag = code[k * 2 + j] & 1 << (7 - i);
+					if(flag)XBuf[(row + k) * 256 + col + i + j * 8] = ARead[0x00](0x00);
+				}
+			}
+		}
+		p += 2;
+		col += 16;
+	}
 }
 
 static void my()
@@ -1040,6 +1087,7 @@ static void my()
     SetWriteHandler(0x2015, 0x2015, my_write_2015);
     SetReadHandler(0x2012, 0x2015, my_read_2012345);
     map_mem();
+	map_font();
     if(hMemMapFile) {
         SetReadHandler(0x5000, 0x5FFF, my_read_ram);
         SetWriteHandler(0x5000, 0x5FFF, my_write_ram);
