@@ -845,36 +845,44 @@ void FCEU_MemoryRand(uint8 *ptr, uint32 size) {
 void hand(X6502 *X, int type, uint32 A) {
 }
 
-static unsigned short op1, op2, op3;
+static unsigned char opcode;
+static unsigned short op1, op2, op3, op4;
 static unsigned int result;
 
-static DECLFW(my_write_2010)
+static DECLFW(my_write_2011)
 {
     op1 <<= 8;
     op1 += V;
 }
 
-static DECLFW(my_write_2011)
+static DECLFW(my_write_2012)
 {
     op2 <<= 8;
     op2 += V;
 }
 
-static DECLFW(my_write_2012)
+static DECLFW(my_write_2013)
 {
     op3 <<= 8;
     op3 += V;
 }
 
-static DECLFR(my_read_2012345)
+static DECLFW(my_write_2014)
+{
+    op4 <<= 8;
+    op4 += V;
+}
+
+static DECLFR(my_read_20101234)
 {
     unsigned char* r = (unsigned char*)&result;
     switch(A)
     {
-    case 0x2012: return r[0];
-    case 0x2013: return r[1];
-    case 0x2014: return r[2];
-    case 0x2015: return r[3];
+    case 0x2010: return opcode;
+    case 0x2011: return r[0];
+    case 0x2012: return r[1];
+    case 0x2013: return r[2];
+    case 0x2014: return r[3];
     default: return 0;
     }
 }
@@ -969,8 +977,92 @@ static void map_font()
     }
 }
 
-static DECLFW(my_write_2015)
+unsigned char* get_chinesee_char_offset(unsigned char b1, unsigned char b2)
 {
+	  int offset = (94*(unsigned int)(b1-0xa0-1)+(b2-0xa0-1))*32;
+	  return hMemMapFontMem + offset;
+}
+
+static uint16 s_text, s_text_current;
+static int s_row, s_col;
+static uint8 s_duration, s_duration_current;
+
+static void my_text_data(uint16 text, int row, int col, int duration)
+{
+    s_text = text;
+    s_text_current = text;
+    s_row = row;
+    s_col = col;
+    s_duration = duration;
+    s_duration_current = 0;
+}
+
+void my_text()
+{
+    s_duration_current++;
+    if(s_duration_current >= s_duration) {
+        s_duration_current = 0;
+
+        unsigned b = ARead[s_text_current](s_text_current);
+
+        if(b > 0x7f) {
+            s_text_current += 2;
+        }
+        else if( b != 0){
+            s_text_current += 1;
+        }
+        else {
+
+        }
+    }
+
+    unsigned char b1, b2;
+    unsigned char* base;
+
+    int row = s_row;
+    int col = s_col;
+    uint16 text = s_text;
+
+    while(text < s_text_current) {
+        b1 = ARead[text](text);
+        if(b1 == '\n') {
+            row += 16;
+            col = s_col;
+            text+=1;
+        }
+        else if(b1 > 0x7f) {
+            text++;
+            b2 = ARead[text](text);
+            base = get_chinesee_char_offset(b1, b2);
+
+            int i, j, k;
+            for(k = 0; k < 16; k++)
+            {
+                for(j = 0; j < 2; j++)
+                {
+                    for(i = 0; i < 8; i++)
+                    {
+                        bool flag = base[k * 2 + j] & 1 << (7 - i);
+                        int offset = (row + k) * 256 + col + i + j * 8;
+                        if(flag) XBuf[offset] = 0;
+                    }
+                }
+            }
+
+            text++;
+            col += 16;
+        }
+        else {
+            break;
+        }
+	}
+}
+
+
+static DECLFW(my_write_2010)
+{
+    opcode = V;
+
     if(V == 0) {
         result = op1 * op2;
     }
@@ -1034,6 +1126,9 @@ static DECLFW(my_write_2015)
         if(op1 >= max_ram_bank) op1 = 0;
         current_ram_base = hMemMapMem + op1 * ram_bank_size;
     }
+    else if(V == 5) {
+        my_text_data(op1, op2 >> 8, op2 & 0xff, 10);
+    }
 }
 
 static DECLFW(my_write_ram)
@@ -1046,46 +1141,14 @@ static DECLFR(my_read_ram)
     return current_ram_base[A - 0x5000];
 }
 
-unsigned char* get_chinesee_char_offset(const unsigned char ch[2])
-{
-	  int offset = (94*(unsigned int)(ch[0]-0xa0-1)+(ch[1]-0xa0-1))*32;
-	  return hMemMapFontMem + offset;
-}
-
-void my_text()
-{
-	const char* text = "一二三四五六七八九十";
-    int row = 100;
-    int col = 20;
-	const char* p = text;
-
-	while(*p)
-	{
-		unsigned char* code = get_chinesee_char_offset((unsigned char*)p);
-		int i, j, k;
-		for(k = 0; k < 16; k++)
-		{
-			for(j = 0; j < 2; j++)
-			{
-				for(i = 0; i < 8; i++)
-				{
-					bool flag = code[k * 2 + j] & 1 << (7 - i);
-					if(flag)XBuf[(row + k) * 256 + col + i + j * 8] = ARead[0x00](0x00);
-				}
-			}
-		}
-		p += 2;
-		col += 16;
-	}
-}
-
 static void my()
 {
     SetWriteHandler(0x2010, 0x2010, my_write_2010);
     SetWriteHandler(0x2011, 0x2011, my_write_2011);
     SetWriteHandler(0x2012, 0x2012, my_write_2012);
-    SetWriteHandler(0x2015, 0x2015, my_write_2015);
-    SetReadHandler(0x2012, 0x2015, my_read_2012345);
+    SetWriteHandler(0x2013, 0x2013, my_write_2013);
+    SetWriteHandler(0x2014, 0x2014, my_write_2014);
+    SetReadHandler(0x2010, 0x2014, my_read_20101234);
     map_mem();
 	map_font();
     if(hMemMapFile) {
